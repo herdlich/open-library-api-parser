@@ -23,15 +23,16 @@ def get_args():
     parser.add_argument("--db", default="data/books.db")
     parser.add_argument("--query", default="python")
     parser.add_argument("--pages", type=int, default=1)
+    parser.add_argument("--limit", type=int, default=50)
 
     return parser.parse_args()
 
 
-def fetch_data(query, page):
+def fetch_data(query, page, limit):
     params = {
         "q": query,
         "page": page,
-        "limit": 50
+        "limit": limit
     }
 
     try:
@@ -59,20 +60,36 @@ def transform_items(data):
             language_list = doc.get("language") or []
             language = ", ".join(language_list) if isinstance(language_list, list) else str(language_list)
 
-            first_publish_year = doc.get("first_publish_year") or ""
+            first_publish_year = doc.get("first_publish_year") or None
 
             work_key = doc.get("key")
-            link = urljoin(BOOK_URL, work_key) if work_key else None
+            if not work_key:
+                continue
 
-            book_id = work_key.split("/")[-1] if work_key else ""
+            link = urljoin(BOOK_URL, work_key) or None
+
+            book_id = work_key.split("/")[-1] or ""
+
+            edition_count = doc.get("edition_count") or None
+
+            cover_i = doc.get("cover_i") or None
+
+            ia_list = doc.get("ia") or []
+            ia = ", ".join(ia_list[:3]) if isinstance(ia_list, list) else str(ia_list)
+
+            cover_link = f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg" if cover_i else ""
 
             book_dict = {
+                "book_id": book_id,
                 "title": title,
                 "author_name": author_name,
-                "language": language,
                 "first_publish_year": first_publish_year,
+                "language": language,
+                "edition_count": edition_count,
+                "cover_i": cover_i,
+                "cover_link": cover_link,
+                "ia": ia,
                 "link": link,
-                "book_id": book_id
             }
 
             books_list.append(book_dict)
@@ -80,24 +97,21 @@ def transform_items(data):
     return books_list
 
 
-def parse_all_pages(pages, query):
+def parse_all_pages(pages, query, limit):
     all_books = []
 
     for page in range(1, pages + 1):
-        raw_items = fetch_data(query, page)
+        raw_items = fetch_data(query, page, limit)
         if not raw_items:
             continue
 
         clean_items = transform_items(raw_items)
         if not clean_items:
-            continue
+            break
 
         all_books.extend(clean_items)
 
         time.sleep(0.5)
-
-    if not all_books:
-        return None
 
     return all_books
 
@@ -106,7 +120,8 @@ def save_csv(csv_file, csv_data):
     Path(csv_file).parent.mkdir(parents=True, exist_ok=True)
 
     with open(csv_file, "w", encoding="utf-8", newline="") as file:
-        fieldnames = ["title", "author_name", "language", "first_publish_year", "link", "book_id"]
+        fieldnames = ["book_id", "title", "author_name", "first_publish_year", "language", "edition_count", "cover_i",
+                      "cover_link", "ia", "link"]
         writer = csv.DictWriter(file, fieldnames=fieldnames)
 
         writer.writeheader()
@@ -121,12 +136,16 @@ def db_init(db_file):
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS books (
+        book_id TEXT PRIMARY KEY,
         title TEXT,
         author_name TEXT,
-        language TEXT,
         first_publish_year INTEGER,
-        link TEXT,
-        book_id TEXT PRIMARY KEY
+        language TEXT,
+        edition_count INTEGER,
+        cover_i INTEGER,
+        cover_link TEXT,
+        ia TEXT,
+        link TEXT
         )
     """)
 
@@ -139,16 +158,21 @@ def save_to_db(db_file, items):
     cursor = connection.cursor()
 
     cursor.executemany("""
-    INSERT OR IGNORE INTO books (title, author_name, language, first_publish_year, link, book_id)
-    VALUES(?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO books (book_id, title, author_name, first_publish_year, language, 
+    edition_count, cover_i, cover_link, ia, link)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
         (
+            item["book_id"],
             item["title"],
             item["author_name"],
-            item["language"],
             item["first_publish_year"] if item["first_publish_year"] else None,
+            item["language"],
+            item["edition_count"],
+            item["cover_i"],
+            item["cover_link"],
+            item["ia"],
             item["link"],
-            item["book_id"]
         )
         for item in items
     ])
@@ -162,7 +186,7 @@ def main():
 
     db_init(args.db)
 
-    all_books = parse_all_pages(args.pages, args.query)
+    all_books = parse_all_pages(args.pages, args.query, args.limit)
     if not all_books:
         print("No books found")
         logging.warning("No books found")
@@ -170,6 +194,14 @@ def main():
 
     save_csv(args.output, all_books)
     save_to_db(args.db, all_books)
+
+    print(f"Books saved: {len(all_books)}")
+    print(f"Output: {args.output}")
+    print(f"Database: {args.db}")
+
+    logging.info(f"Books saved: {len(all_books)}")
+    logging.info(f"Output: {args.output}")
+    logging.info(f"Database: {args.db}")
 
 
 if __name__ == "__main__":
