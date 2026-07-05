@@ -44,6 +44,8 @@ def fetch_data(query, page, limit):
 
     except requests.exceptions.RequestException as error:
         print(f"Request error: {error}")
+        logging.error(f"Request error: {error}")
+
         return None
 
 
@@ -60,22 +62,26 @@ def transform_items(data):
             language_list = doc.get("language") or []
             language = ", ".join(language_list) if isinstance(language_list, list) else str(language_list)
 
-            first_publish_year = doc.get("first_publish_year") or None
+            first_publish_year = doc.get("first_publish_year")
 
             work_key = doc.get("key")
             if not work_key:
+                logging.warning("Work key not found. SKIP book")
                 continue
 
-            link = urljoin(BOOK_URL, work_key) or None
+            link = urljoin(BOOK_URL, work_key)
 
-            book_id = work_key.split("/")[-1] or ""
+            book_id = work_key.split("/")[-1]
+            if not book_id:
+                logging.warning("Book ID not found. SKIP book")
+                continue
 
-            edition_count = doc.get("edition_count") or None
+            edition_count = doc.get("edition_count")
 
-            cover_i = doc.get("cover_i") or None
+            cover_i = doc.get("cover_i")
 
             ia_list = doc.get("ia") or []
-            ia = ", ".join(ia_list[:3]) if isinstance(ia_list, list) else str(ia_list)
+            ia = ", ".join(map(str, ia_list[:3])) if isinstance(ia_list, list) else str(ia_list)
 
             cover_link = f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg" if cover_i else ""
 
@@ -102,14 +108,18 @@ def parse_all_pages(pages, query, limit):
 
     for page in range(1, pages + 1):
         raw_items = fetch_data(query, page, limit)
-        if not raw_items:
-            continue
+        if raw_items is None:
+            logging.warning(f"API request failed on page {page}. STOP")
+            break
 
         clean_items = transform_items(raw_items)
         if not clean_items:
+            logging.warning("Cleanup was unsuccessful. STOP")
             break
 
         all_books.extend(clean_items)
+
+        logging.info(f"Parsed page: {page}, books found: {len(clean_items)}")
 
         time.sleep(0.5)
 
@@ -154,19 +164,17 @@ def db_init(db_file):
 
 
 def save_to_db(db_file, items):
+    Path(db_file).parent.mkdir(parents=True, exist_ok=True)
+
     connection = sqlite3.connect(db_file)
     cursor = connection.cursor()
 
-    cursor.executemany("""
-    INSERT OR IGNORE INTO books (book_id, title, author_name, first_publish_year, language, 
-    edition_count, cover_i, cover_link, ia, link)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, [
+    rows = [
         (
             item["book_id"],
             item["title"],
             item["author_name"],
-            item["first_publish_year"] if item["first_publish_year"] else None,
+            item["first_publish_year"],
             item["language"],
             item["edition_count"],
             item["cover_i"],
@@ -175,7 +183,23 @@ def save_to_db(db_file, items):
             item["link"],
         )
         for item in items
-    ])
+    ]
+
+    cursor.executemany("""
+    INSERT INTO books (book_id, title, author_name, first_publish_year, language, 
+    edition_count, cover_i, cover_link, ia, link)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(book_id) DO UPDATE SET
+    title = excluded.title,
+    author_name = excluded.author_name,
+    first_publish_year = excluded.first_publish_year,
+    language = excluded.language,
+    edition_count = excluded.edition_count,
+    cover_i = excluded.cover_i,
+    cover_link = excluded.cover_link,
+    ia = excluded.ia,
+    link = excluded.link
+    """, rows)
 
     connection.commit()
     connection.close()
@@ -189,7 +213,7 @@ def main():
     all_books = parse_all_pages(args.pages, args.query, args.limit)
     if not all_books:
         print("No books found")
-        logging.warning("No books found")
+        logging.warning("No books found. STOP")
         return
 
     save_csv(args.output, all_books)
