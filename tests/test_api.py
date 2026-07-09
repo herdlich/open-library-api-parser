@@ -13,6 +13,8 @@ def test_fetch_data_returns_json(monkeypatch):
     }
 
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
