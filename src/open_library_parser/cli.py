@@ -67,7 +67,7 @@ def main():
     all_books = parse_all_pages(args.pages, args.query, args.limit)
     if not all_books:
         print("No books found")
-        logging.warning("No books found. STOP")
+        logger.warning("No books found. STOP")
         return
 
     save_csv(args.output, all_books)
@@ -77,6 +77,15 @@ def main():
     print(f"Output: {args.output}")
     print(f"Database: {args.db}")
 
-    logging.info(f"Books saved: {len(all_books)}")
-    logging.info(f"Output: {args.output}")
-    logging.info(f"Database: {args.db}")
+    logger.info(
+        "Books saved: %s",
+        len(all_books)
+    )
+    logger.info(
+        "Output: %s",
+        args.output
+    )
+    logger.info(
+        "Database: %s",
+        args.db
+    )

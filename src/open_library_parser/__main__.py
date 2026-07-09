@@ -1,4 +1,4 @@
-from .cli import main
+from open_library_parser.cli import main
 
 if __name__ == "__main__":
     main()
